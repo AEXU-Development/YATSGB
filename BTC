@@ -1,0 +1,239 @@
+# Source code if you're curious
+
+
+import discord
+from discord.ext import commands
+from discord import app_commands
+from TornAPIWrapper import TornApiWrapper
+import json
+import os
+import logging
+
+# === CONFIG ===
+TOKEN = "Not giving out my bot token :^"
+DATA_FILE = "data.json"
+
+# === DISCORD BOT SETUP ===
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+
+# === LOAD/SAVE USER DATA ===
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        user_data = json.load(f)
+    channel_limits = user_data.get("channel_limits", {})
+else:
+    user_data = {}
+    channel_limits = {}
+
+def save_data():
+    user_data["channel_limits"] = channel_limits
+    with open(DATA_FILE, "w") as f:
+        json.dump(user_data, f)
+
+def is_channel_allowed(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    if guild_id not in channel_limits:
+        return True
+    return str(interaction.channel_id) in channel_limits[guild_id]
+
+# === ON READY ===
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    logging.info(f"Bot is ready. Logged in as {bot.user}")
+
+# === /saveid ===
+@bot.tree.command(name="saveid", description="Save your Torn user ID and API key")
+@app_commands.describe(torn_id="Your Torn user ID", api_key="Your Torn API key")
+async def saveid(interaction: discord.Interaction, torn_id: int, api_key: str):
+    logging.info(f"/saveid called by {interaction.user} | ID: {torn_id}, Key: {api_key[:4]}***")
+    user_data[str(interaction.user.id)] = {"torn_id": torn_id, "api_key": api_key}
+    save_data()
+    await interaction.response.send_message("Your Torn ID and API key have been saved.", ephemeral=True)
+
+# === /stats ===
+@bot.tree.command(name="stats", description="View Torn stats for yourself or another user")
+@app_commands.describe(user="Discord user to view stats for (optional)")
+async def stats(interaction: discord.Interaction, user: discord.User = None):
+    if not is_channel_allowed(interaction):
+        await interaction.response.send_message("This command is not allowed in this channel.", ephemeral=True)
+        return
+
+    target = user or interaction.user
+
+    if user and (not interaction.guild or user.id not in [m.id for m in interaction.guild.members]):
+        await interaction.response.send_message("You can only view stats for users in this server.", ephemeral=True)
+        return
+
+    target_id = str(target.id)
+    logging.info(f"/stats called by {interaction.user} for target {target}")
+
+    if target_id not in user_data:
+        logging.info(f"No saved data for {target}")
+        await interaction.response.send_message(f"{target.display_name} has not saved their Torn ID yet.", ephemeral=True)
+        return
+
+    api_info = user_data[target_id]
+    taw = TornApiWrapper(api_key=api_info["api_key"])
+
+    try:
+        data = taw.get_user(user_id=api_info["torn_id"], selections=["basic", "personalstats"])
+        logging.debug(f"Torn API response for {target}: {data}")
+
+        name = data.get("name", "Unknown")
+        level = data.get("level", "N/A")
+
+        stats_data = data.get("personalstats", {})
+        strength = stats_data.get("strength", "N/A")
+        defense = stats_data.get("defense", "N/A")
+        speed = stats_data.get("speed", "N/A")
+        dexterity = stats_data.get("dexterity", "N/A")
+        total_stats = stats_data.get("totalstats", "N/A")
+        xans = stats_data.get("xantaken", "N/A")
+
+        msg = (
+            f"**{name}**     Lvl: {level}\n"
+            f"**Xanax used:** {xans}\n\n"
+            f"**Strength:** {strength}\n"
+            f"**Defense:** {defense}\n"
+            f"**Speed:** {speed}\n"
+            f"**Dexterity:** {dexterity}\n"
+            f"**Total Stats:** {total_stats}"
+        )
+    except Exception as e:
+        logging.error(f"Error fetching stats for {target}: {e}")
+        await interaction.response.send_message(f"Error: {e}", ephemeral=True)
+        return
+
+    await interaction.response.send_message(msg)
+
+# === /total ===
+@bot.tree.command(name="total", description="Show total combined stats of saved users in this server")
+async def total(interaction: discord.Interaction):
+    if not is_channel_allowed(interaction):
+        await interaction.response.send_message("This command is not allowed in this channel.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    if not interaction.guild:
+        await interaction.followup.send("This command can only be used in a server.")
+        return
+
+    try:
+        with open(DATA_FILE, "r") as f:
+            users_data = json.load(f)
+    except FileNotFoundError:
+        await interaction.followup.send("No saved users found.")
+        return
+
+    total_stats_sum = 0
+    response_lines = []
+
+    server_member_ids = {str(member.id) for member in interaction.guild.members}
+    filtered_users = {uid: info for uid, info in users_data.items() if uid in server_member_ids}
+
+    if not filtered_users:
+        await interaction.followup.send("No saved users from this server.")
+        return
+
+    for user_data_entry in filtered_users.values():
+        api_key = user_data_entry.get("api_key")
+        torn_id = user_data_entry.get("torn_id")
+
+        try:
+            taw = TornApiWrapper(api_key=api_key)
+            profile = taw.get_user(user_id=torn_id)
+            stats_data = taw.get_user(user_id=torn_id, selections=["personalstats"])
+
+            name = profile.get("name", "Unknown")
+            stats = stats_data.get("personalstats", {})
+
+            strength = stats.get("strength", 0)
+            defense = stats.get("defense", 0)
+            speed = stats.get("speed", 0)
+            dexterity = stats.get("dexterity", 0)
+
+            user_total = strength + defense + speed + dexterity
+            total_stats_sum += user_total
+
+            response_lines.append(f"**{name}** ({torn_id}): {user_total:,}")
+
+        except Exception as e:
+            response_lines.append(f"Error fetching data for {torn_id}: {e}")
+
+    response_lines.append(f"\n**Total Combined Stats**: {total_stats_sum:,}")
+    await interaction.followup.send("\n".join(response_lines))
+
+# === /limit ===
+@bot.tree.command(name="limit", description="Restrict bot usage to this channel")
+async def limit(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    channel_id = str(interaction.channel_id)
+
+    if guild_id not in channel_limits:
+        channel_limits[guild_id] = []
+
+    if channel_id not in channel_limits[guild_id]:
+        channel_limits[guild_id].append(channel_id)
+        save_data()
+        await interaction.response.send_message("This channel is now limited for bot usage.", ephemeral=True)
+    else:
+        await interaction.response.send_message("This channel is already in the limit list.", ephemeral=True)
+
+# === /removelimit ===
+@bot.tree.command(name="removelimit", description="Remove this channel from the bot limit list")
+async def removelimit(interaction: discord.Interaction):
+    guild_id = str(interaction.guild_id)
+    channel_id = str(interaction.channel_id)
+
+    if guild_id in channel_limits and channel_id in channel_limits[guild_id]:
+        channel_limits[guild_id].remove(channel_id)
+        if not channel_limits[guild_id]:
+            del channel_limits[guild_id]
+        save_data()
+        await interaction.response.send_message("Channel removed from the limit list.", ephemeral=True)
+    else:
+        await interaction.response.send_message("This channel is not limited.", ephemeral=True)
+
+# === /help ===
+@bot.tree.command(name="help", description="How to get help with using the bot")
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "To get help, just mention the bot by @-ing it in any channel.",
+        ephemeral=True
+    )
+
+# === @message ===
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if bot.user in message.mentions:
+        help_msg = (
+            f"Hello {message.author.mention}!\n"
+            "This is the help-board.\n\n"
+            "**/saveid** - Save your Torn ID so others can view your battle stats\n\n"
+            "**/stats** - View IGN, level, battle stats, total stats, and Xanax used\n\n"
+            "**/total** - Show each saved user's total stats and the total combined stats across the server\n\n"
+            "**/limit** - Restricts the bot's usage to specific channels (typically accessible only to trusted members). Can be used multiple times to add more channels.\n\n"
+            "**/removelimit** - Removes a limited channel. If no channels remain, the bot becomes usable server-wide again.\n\n\n"
+            "*/stats and /total only return the stats of users currently in the server where the command was used*\n"
+            "*If the bot is limited, new or untrusted members will need to save their ID via DMs with the bot.*\n"
+            "*For inquiries or suggestions, DM <@986769111667326998>. For further help:* **YATSGB - <https://discord.gg/sXxrQeXfk3>**"
+        )
+
+        try:
+            await message.author.send(help_msg)
+            await message.channel.send(f"{message.author.mention} I’ve sent you a DM with help information.")
+        except discord.Forbidden:
+            await message.channel.send(f"{message.author.mention} I couldn’t DM you. Please enable DMs.")
+
+    await bot.process_commands(message)
+
+# === RUN BOT ===
+bot.run(TOKEN)
