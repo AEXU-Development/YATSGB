@@ -19,8 +19,8 @@ Use one or both of the links in Bot-Links to add the bot.
 > If the bot is limited, new or untrusted members will need to save their ID via DMs with the bot.
 
 ‎‎‎‎‎‎‎‎ㅤ
-
 ‎‎‎‎‎‎‎‎ㅤ
+Top.gg approved!
 
 If you have any questions, or to request an addition to the bot:
 
