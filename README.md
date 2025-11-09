@@ -7,9 +7,9 @@ Use one or both of the links in Bot-Links to add the bot.
 
 /saveid - Save your Torn ID so others can view your battle stats
 
-/stats - View IGN, level, battle stats, total stats, and Xanax used
+/stats - View IGN, level, battle stats, total stats, and Xanax used. Shows stat changes since your last check and indicates if any Xanax debuffs are active.
 
-/total - Show each saved user's total stats and the total combined stats across the server
+/total - Show contributors (names only) and the total combined stats across the server. Displays changes since the last check.
 
 /limit - Restricts the bot's usage to specific channels (typically accessible only to trusted members). Can be used multiple times to add more channels.
 
